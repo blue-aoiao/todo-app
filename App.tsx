@@ -19,6 +19,7 @@ interface RepeatPattern {
   content: string;
   time: string;
   intervalDays: number;
+  startDate: string;
   endDate: string;
 }
 
@@ -33,15 +34,21 @@ export default function App() {
   const [repeatPatterns, setRepeatPatterns] = useState<RepeatPattern[]>([]);
   const [completedTodos, setCompletedTodos] = useState<TodoItem[]>([]);
   
-  // 履歴管理用スタック
   const [pastHistory, setPastHistory] = useState<HistorySnapshot[]>([]);
   const [futureHistory, setFutureHistory] = useState<HistorySnapshot[]>([]);
 
-  // メイン画面の切り替え用（0: タスク一覧, 1: カレンダー）
+  // メイン画面切り替え（0: タスク一覧, 1: カレンダー）
   const [currentTab, setCurrentTab] = useState(0);
-
-  // ★新しく追加：タスク追加モーダルの表示フラグ
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
+
+  // カレンダーの基準月
+  const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
+  const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
+
+  // 特定の日付のタスクを確認するモーダル
+  const [selectedDateTodos, setSelectedDateTodos] = useState<TodoItem[]>([]);
+  const [selectedDateStr, setSelectedDateStr] = useState('');
+  const [isDateModalVisible, setIsDateModalVisible] = useState(false);
 
   // 入力フォーム用State
   const [title, setTitle] = useState('');
@@ -57,20 +64,19 @@ export default function App() {
   const [selectedTodo, setSelectedTodo] = useState<TodoItem | null>(null);
   const [isDetailModalVisible, setIsDetailModalVisible] = useState(false);
 
-  // データの読み込みと保存
   useEffect(() => {
-    const savedTodos = localStorage.getItem('advanced-todo-list-v7');
-    const savedPatterns = localStorage.getItem('repeat-patterns-v7');
-    const savedCompleted = localStorage.getItem('completed-todos-v7');
+    const savedTodos = localStorage.getItem('advanced-todo-list-v10');
+    const savedPatterns = localStorage.getItem('repeat-patterns-v10');
+    const savedCompleted = localStorage.getItem('completed-todos-v10');
     if (savedTodos) setTodos(JSON.parse(savedTodos));
     if (savedPatterns) setRepeatPatterns(JSON.parse(savedPatterns));
     if (savedCompleted) setCompletedTodos(JSON.parse(savedCompleted));
   }, []);
 
   useEffect(() => {
-    localStorage.setItem('advanced-todo-list-v7', JSON.stringify(todos));
-    localStorage.setItem('repeat-patterns-v7', JSON.stringify(repeatPatterns));
-    localStorage.setItem('completed-todos-v7', JSON.stringify(completedTodos));
+    localStorage.setItem('advanced-todo-list-v10', JSON.stringify(todos));
+    localStorage.setItem('repeat-patterns-v10', JSON.stringify(repeatPatterns));
+    localStorage.setItem('completed-todos-v10', JSON.stringify(completedTodos));
   }, [todos, repeatPatterns, completedTodos]);
 
   const saveToHistory = () => {
@@ -118,32 +124,58 @@ export default function App() {
 
   const addTodo = () => {
     if (title.trim() === '' || deadlineDate === '') {
-      alert('タイトルと締め切り日は必須入力です！');
+      alert('タイトルと締め切り日は必須入力です。');
       return;
     }
 
     saveToHistory();
 
     const intervalDays = parseInt(repeatInterval, 10);
-    const fullDeadline = `${deadlineDate}T${deadlineTime}`;
+    const generatedTodos: TodoItem[] = [];
 
     if (!isNaN(intervalDays) && intervalDays > 0) {
       if (!repeatEndDate) {
-        alert('繰り返しを設定する場合は、終了日も指定してください！');
+        alert('繰り返しを設定する場合は、終了日も指定してください。');
         return;
       }
       const newPatternId = `pattern-${Date.now()}`;
-      const newPattern: RepeatPattern = { id: newPatternId, title, description, content, time: deadlineTime, intervalDays, endDate: repeatEndDate };
+      const newPattern: RepeatPattern = { 
+        id: newPatternId, title, description, content, time: deadlineTime, intervalDays, startDate: deadlineDate, endDate: repeatEndDate 
+      };
       setRepeatPatterns([...repeatPatterns, newPattern]);
 
-      const firstTodo: TodoItem = { id: `todo-${Date.now()}`, title, description, content, deadline: fullDeadline, memo, repeatId: newPatternId };
-      setTodos([...todos, firstTodo]);
+      // 定期タスクを終了日までループしてすべて一括生成
+      const start = new Date(deadlineDate.replace(/-/g, '/'));
+      const end = new Date(repeatEndDate.replace(/-/g, '/'));
+      let current = new Date(start);
+      let count = 0;
+
+      while (current <= end) {
+        const y = current.getFullYear();
+        const m = String(current.getMonth() + 1).padStart(2, '0');
+        const d = String(current.getDate()).padStart(2, '0');
+        
+        generatedTodos.push({
+          id: `todo-${Date.now()}-${count}`,
+          title,
+          description,
+          content,
+          deadline: `${y}-${m}-${d}T${deadlineTime}`,
+          memo,
+          repeatId: newPatternId
+        });
+
+        current.setDate(current.getDate() + intervalDays);
+        count++;
+      }
+      setTodos([...todos, ...generatedTodos]);
     } else {
+      // 単発タスクの生成
+      const fullDeadline = `${deadlineDate}T${deadlineTime}`;
       const singleTodo: TodoItem = { id: `todo-${Date.now()}`, title, description, content, deadline: fullDeadline, memo };
       setTodos([...todos, singleTodo]);
     }
 
-    // フォームをリセットしてモーダルを閉じる
     setTitle(''); setDescription(''); setContent(''); setMemo(''); setRepeatInterval(''); setRepeatEndDate('');
     setIsAddModalVisible(false);
   };
@@ -168,36 +200,8 @@ export default function App() {
     }
     setCompletedTodos(updatedCompleted);
 
-    const filteredTodos = todos.filter((todo) => todo.id !== targetTodo.id);
-
-    if (targetTodo.repeatId) {
-      const pattern = repeatPatterns.find((p) => p.id === targetTodo.repeatId);
-      if (pattern) {
-        const currentDeadline = new Date(targetTodo.deadline);
-        currentDeadline.setDate(currentDeadline.getDate() + pattern.intervalDays);
-        const endDate = new Date(pattern.endDate);
-
-        if (currentDeadline <= endDate) {
-          const y = currentDeadline.getFullYear();
-          const m = String(currentDeadline.getMonth() + 1).padStart(2, '0');
-          const d = String(currentDeadline.getDate()).padStart(2, '0');
-          const nextTodo: TodoItem = {
-            id: `todo-${Date.now()}`,
-            title: pattern.title,
-            description: pattern.description,
-            content: pattern.content,
-            deadline: `${y}-${m}-${d}T${pattern.time}`,
-            memo: '',
-            repeatId: pattern.id,
-          };
-          setTodos([...filteredTodos, nextTodo]);
-          return;
-        } else {
-          setRepeatPatterns(repeatPatterns.filter((p) => p.id !== pattern.id));
-        }
-      }
-    }
-    setTodos(filteredTodos);
+    // 該当のタスクを一覧から除外
+    setTodos(todos.filter((todo) => todo.id !== targetTodo.id));
   };
 
   const openDetailModal = (todo: TodoItem) => {
@@ -205,33 +209,116 @@ export default function App() {
     setIsDetailModalVisible(true);
   };
 
-  const sortedTodos = [...todos].sort((a, b) => new Date(a.deadline).getTime() - new Date(b.deadline).getTime());
-
   const formatDeadline = (isoString: string) => {
     const date = new Date(isoString);
     return `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
   };
 
-  // Web・アプリ兼用の簡易スワイプハンドラ（擬似的に左右クリックやドラッグに対応させる土台）
+  // タスク一覧（リスト画面）用のフィルタリングロジック
+  const getFilteredListTodos = () => {
+    // 1. まず通常の単発タスクをすべて抽出
+    const singleTodos = todos.filter(todo => !todo.repeatId);
+
+    // 2. 定期タスクに関しては、グループ（repeatId）ごとに一番日付が若い（直近の）1件だけを抽出
+    const repeatMap = new Map<string, TodoItem>();
+    todos.forEach(todo => {
+      if (todo.repeatId) {
+        const existing = repeatMap.get(todo.repeatId);
+        if (!existing || new Date(todo.deadline).getTime() < new Date(existing.deadline).getTime()) {
+          repeatMap.set(todo.repeatId, todo);
+        }
+      }
+    });
+
+    const nearestRepeatTodos = Array.from(repeatMap.values());
+    
+    // 3. これらを合体させて、全体の期限順に並び替える
+    const combined = [...singleTodos, ...nearestRepeatTodos];
+    return combined.sort((a, b) => new Date(a.deadline).getTime() - new Date(b.deadline).getTime());
+  };
+
+  const listTodos = getFilteredListTodos();
+
+  // カレンダー用のセル抽出
+  const getDaysInMonth = (year: number, month: number) => {
+    return new Date(year, month + 1, 0).getDate();
+  };
+
+  const getFirstDayOfWeek = (year: number, month: number) => {
+    return new Date(year, month, 1).getDay();
+  };
+
+  const changeMonth = (direction: number) => {
+    let newMonth = currentMonth + direction;
+    let newYear = currentYear;
+    if (newMonth > 11) {
+      newMonth = 0;
+      newYear += 1;
+    } else if (newMonth < 0) {
+      newMonth = 11;
+      newYear -= 1;
+    }
+    setCurrentMonth(newMonth);
+    setCurrentYear(newYear);
+  };
+
+  const handleDatePress = (day: number) => {
+    const dateStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const dayTodos = todos.filter(todo => todo.deadline.startsWith(dateStr));
+    setSelectedDateStr(`${currentYear}年${currentMonth + 1}月${day}日`);
+    setSelectedDateTodos(dayTodos);
+    setIsDateModalVisible(true);
+  };
+
+  const renderCalendarCells = () => {
+    const daysInMonth = getDaysInMonth(currentYear, currentMonth);
+    const firstDay = getFirstDayOfWeek(currentYear, currentMonth);
+    const cells = [];
+
+    for (let i = 0; i < firstDay; i++) {
+      cells.push(<View key={`empty-${i}`} style={styles.calendarCellEmpty} />);
+    }
+
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dateStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      const dayTodos = todos.filter(todo => todo.deadline.startsWith(dateStr));
+
+      cells.push(
+        <TouchableOpacity key={`day-${day}`} style={styles.calendarCell} onPress={() => handleDatePress(day)}>
+          <Text style={styles.calendarDayText}>{day}</Text>
+          <ScrollView style={styles.calendarTaskScroll} showsVerticalScrollIndicator={false}>
+            {dayTodos.map((todo) => (
+              <View key={todo.id} style={[styles.calendarTaskRow, todo.repeatId ? styles.calendarTaskRowRepeat : null]}>
+                <Text style={styles.calendarTaskText} numberOfLines={1}>
+                  {todo.repeatId ? '[定] ' : ''}{todo.title}
+                </Text>
+              </View>
+            ))}
+          </ScrollView>
+        </TouchableOpacity>
+      );
+    }
+    return cells;
+  };
+
   let touchStartX = 0;
   const handleTouchStart = (e: any) => { touchStartX = e.nativeEvent.pageX; };
   const handleTouchEnd = (e: any) => {
     const touchEndX = e.nativeEvent.pageX;
     const dx = touchStartX - touchEndX;
-    if (dx > 60 && currentTab === 0) setCurrentTab(1); // 左スワイプ -> 画面2
-    if (dx < -60 && currentTab === 1) setCurrentTab(0); // 右スワイプ -> 画面1
+    if (dx > 60 && currentTab === 0) setCurrentTab(1);
+    if (dx < -60 && currentTab === 1) setCurrentTab(0);
   };
 
   return (
     <View style={styles.container}>
       
-      {/*  1. ヘッダーエリア */}
+      {/* 1. ヘッダーエリア */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.headerIcon} onPress={() => alert('ヘルプは後ほど実装します！')}>
-          <Text style={styles.headerIconText}>？</Text>
+        <TouchableOpacity style={styles.headerIcon} onPress={() => alert('ヘルプ機能')}>
+          <Text style={styles.headerIconText}>?</Text>
         </TouchableOpacity>
         
-        {/*  開いた日の日付を自動で取得して「XXXX年XX月XX日 (曜日)」に変換 */}
         <Text style={styles.headerDate}>
           {(() => {
             const today = new Date();
@@ -243,32 +330,28 @@ export default function App() {
           })()}
         </Text>
         
-        <TouchableOpacity style={styles.headerIcon} onPress={() => alert('ソート機能は後ほど実装します！')}>
-          <Text style={styles.headerIconText}>▽</Text>
+        <TouchableOpacity style={styles.headerIcon} onPress={() => alert('並び替え機能')}>
+          <Text style={styles.headerIconText}>▲▼</Text>
         </TouchableOpacity>
       </View>
 
-      {/* スワイプを視覚的に助けるインジケーター兼タブ */}
+      {/* タブバー */}
       <View style={styles.tabBar}>
         <TouchableOpacity style={[styles.tabItem, currentTab === 0 && styles.tabActive]} onPress={() => setCurrentTab(0)}>
-          <Text style={[styles.tabText, currentTab === 0 && styles.tabTextActive]}> タスク一覧</Text>
+          <Text style={[styles.tabText, currentTab === 0 && styles.tabTextActive]}>リスト</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[styles.tabItem, currentTab === 1 && styles.tabActive]} onPress={() => setCurrentTab(1)}>
-          <Text style={[styles.tabText, currentTab === 1 && styles.tabTextActive]}> カレンダー</Text>
+          <Text style={[styles.tabText, currentTab === 1 && styles.tabTextActive]}>カレンダー</Text>
         </TouchableOpacity>
       </View>
 
-      {/*  2. メインエリア（左右スワイプ切り替えの検出） */}
-      <View 
-        style={styles.mainContent} 
-        onTouchStart={handleTouchStart} 
-        onTouchEnd={handleTouchEnd}
-      >
+      {/* 2. メインエリア */}
+      <View style={styles.mainContent} onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
         {currentTab === 0 ? (
-          /* ーー 画面1: タスク一覧 ーー */
+          /* リスト表示画面 */
           <View style={{ flex: 1 }}>
             <FlatList
-              data={sortedTodos}
+              data={listTodos}
               keyExtractor={(item) => item.id}
               renderItem={({ item }) => (
                 <View style={styles.todoItem}>
@@ -276,71 +359,87 @@ export default function App() {
                     <View style={styles.checkboxInner} />
                   </TouchableOpacity>
                   <TouchableOpacity style={styles.textContainer} onPress={() => openDetailModal(item)}>
-                    <Text style={styles.todoTitle}>{item.title} {item.repeatId ? <Text style={styles.repeatBadge}>🔄 定期</Text> : null}</Text>
+                    <Text style={styles.todoTitle}>
+                      {item.title} {item.repeatId ? <Text style={styles.repeatBadge}>[定期]</Text> : null}
+                    </Text>
                     {item.description ? <Text style={styles.todoDescription}>{item.description}</Text> : null}
-                    <Text style={styles.deadlineText}> 締め切り: {formatDeadline(item.deadline)}</Text>
+                    <Text style={styles.deadlineText}>期限: {formatDeadline(item.deadline)}</Text>
                   </TouchableOpacity>
                 </View>
               )}
-              ListEmptyComponent={<Text style={styles.emptyText}>有効なタスクはありません。{"\n"}フッターの「＋」から追加しましょう！</Text>}
+              ListEmptyComponent={<Text style={styles.emptyText}>タスクはありません。{"\n"}下の「追加」から登録してください。</Text>}
               style={{ flex: 1 }}
             />
           </View>
         ) : (
-          /* ーー 画面2: カレンダー表示（次のステップで本格実装） ーー */
-          <View style={styles.calendarPlaceholder}>
-            <Text style={styles.calendarTitle}> カレンダービュー (開発中)</Text>
-            <Text style={styles.calendarSub}>ここに各日付と締め切りタスクの簡略情報が並びます！</Text>
+          /* カレンダー表示画面 */
+          <View style={styles.calendarContainer}>
+            <View style={styles.calendarHeader}>
+              <TouchableOpacity style={styles.monthNavBtn} onPress={() => changeMonth(-1)}>
+                <Text style={styles.monthNavText}>◀</Text>
+              </TouchableOpacity>
+              <Text style={styles.calendarMonthTitle}>{currentYear}年 {currentMonth + 1}月</Text>
+              <TouchableOpacity style={styles.monthNavBtn} onPress={() => changeMonth(1)}>
+                <Text style={styles.monthNavText}>▶</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.weekHeader}>
+              {['日', '月', '火', '水', '木', '金', '土'].map((d, index) => (
+                <Text key={d} style={[styles.weekText, index === 0 && styles.sundayText, index === 6 && styles.saturdayText]}>{d}</Text>
+              ))}
+            </View>
+
+            <View style={styles.calendarGrid}>
+              {renderCalendarCells()}
+            </View>
           </View>
         )}
       </View>
 
-      {/*  3. フッターエリア */}
+      {/* 3. フッターエリア */}
       <View style={styles.footer}>
-        {/* 左側：Undo / Redo */}
         <View style={styles.footerLeft}>
           <TouchableOpacity style={[styles.histBtn, pastHistory.length === 0 && styles.histBtnDisabled]} onPress={handleUndo} disabled={pastHistory.length === 0}>
-            <Text style={styles.histBtnText}>↩ ({pastHistory.length})</Text>
+            <Text style={styles.histBtnText}>◀ 戻る ({pastHistory.length})</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[styles.histBtn, { marginLeft: 5 }, futureHistory.length === 0 && styles.histBtnDisabled]} onPress={handleRedo} disabled={futureHistory.length === 0}>
-            <Text style={styles.histBtnText}>↪ ({futureHistory.length})</Text>
+            <Text style={styles.histBtnText}>進む ▶ ({futureHistory.length})</Text>
           </TouchableOpacity>
         </View>
 
-        {/* 中央：タスク追加（＋ボタン） */}
         <View style={styles.footerCenter}>
           <TouchableOpacity style={styles.addButton} onPress={() => setIsAddModalVisible(true)}>
-            <Text style={styles.addButtonText}>＋ 追加</Text>
+            <Text style={styles.addButtonText}>追加</Text>
           </TouchableOpacity>
         </View>
 
-        {/* 右側：タスク管理メニュー */}
         <View style={styles.footerRight}>
-          <TouchableOpacity style={styles.menuButton} onPress={() => alert('管理メニュー（完了タスクや定期一覧）は後ほど実装します！')}>
-            <Text style={styles.menuButtonText}> メニュー</Text>
+          <TouchableOpacity style={styles.menuButton} onPress={() => alert('管理メニュー')}>
+            <Text style={styles.menuButtonText}>メニュー</Text>
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* ーーー 新しく追加：タスク追加フォームのポップアップ（モーダル） ーーー */}
+      {/* タスク追加モーダル */}
       <Modal animationType="slide" transparent={true} visible={isAddModalVisible} onRequestClose={() => setIsAddModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalContainer, { maxHeight: '85%' }]}>
-            <Text style={styles.modalTitle}> 新しいタスクを追加</Text>
+            <Text style={styles.modalTitle}>タスク追加</Text>
             <ScrollView style={{ marginBottom: 15 }}>
               <TextInput style={styles.input} placeholder="タイトル（必須）" value={title} onChangeText={setTitle} />
               <TextInput style={styles.input} placeholder="概要" value={description} onChangeText={setDescription} />
               <TextInput style={styles.input} placeholder="内容" value={content} onChangeText={setContent} />
               <TextInput style={styles.input} placeholder="その他メモ" value={memo} onChangeText={setMemo} />
               
-              <Text style={styles.modalLabel}> 締め切り日時</Text>
+              <Text style={styles.modalLabel}>期限設定</Text>
               <View style={styles.dateTimeRow}>
                 <input type="date" value={deadlineDate} onChange={(e) => setDeadlineDate(e.target.value)} style={{ ...webInputStyle, flex: 1, marginRight: 5 }} />
                 <input type="time" step="300" value={deadlineTime} onChange={(e) => setDeadlineTime(e.target.value)} style={{ ...webInputStyle, width: '100px' }} />
               </View>
 
               <View style={styles.repeatSection}>
-                <Text style={styles.sectionLabel}> 定期タスク設定 (任意)</Text>
+                <Text style={styles.sectionLabel}>繰り返し設定（任意）</Text>
                 <View style={styles.dateTimeRow}>
                   <TextInput style={[styles.input, { flex: 1, marginRight: 5, marginBottom: 0 }]} placeholder="例: 3" keyboardType="numeric" value={repeatInterval} onChangeText={setRepeatInterval} />
                   <Text style={{ alignSelf: 'center', marginRight: 10, fontSize: 13 }}>日置き</Text>
@@ -354,29 +453,51 @@ export default function App() {
                 <Button title="キャンセル" color="#666" onPress={() => setIsAddModalVisible(false)} />
               </View>
               <View style={{ flex: 1 }}>
-                <Button title="追加する" color="#FF9500" onPress={addTodo} />
+                <Button title="保存" color="#FF9500" onPress={addTodo} />
               </View>
             </View>
           </View>
         </View>
       </Modal>
 
-      {/* ーーー 詳細確認用モーダル ーーー */}
+      {/* 詳細確認モーダル */}
       <Modal animationType="fade" transparent={true} visible={isDetailModalVisible} onRequestClose={() => setIsDetailModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContainer}>
             {selectedTodo && (
               <ScrollView>
-                <Text style={styles.modalTitle}> タスク詳細</Text>
-                <Text style={styles.modalLabel}>【タイトル】</Text><Text style={styles.modalValue}>{selectedTodo.title}</Text>
-                <Text style={styles.modalLabel}>【概要】</Text><Text style={styles.modalValue}>{selectedTodo.description || '（なし）'}</Text>
-                <Text style={styles.modalLabel}>【内容】</Text><Text style={styles.modalValue}>{selectedTodo.content || '（なし）'}</Text>
-                <Text style={styles.modalLabel}>【締め切り日時】</Text><Text style={styles.modalValue}>{formatDeadline(selectedTodo.deadline)}</Text>
-                <Text style={styles.modalLabel}>【その他メモ】</Text><Text style={styles.modalValue}>{selectedTodo.memo || '（なし）'}</Text>
-                {selectedTodo.completedAt && (<><Text style={styles.modalLabel}>【完了日】</Text><Text style={styles.modalValue}>{selectedTodo.completedAt}</Text></>)}
+                <Text style={styles.modalTitle}>タスク詳細</Text>
+                <Text style={styles.modalLabel}>タイトル</Text><Text style={styles.modalValue}>{selectedTodo.title}</Text>
+                <Text style={styles.modalLabel}>概要</Text><Text style={styles.modalValue}>{selectedTodo.description || '---'}</Text>
+                <Text style={styles.modalLabel}>内容</Text><Text style={styles.modalValue}>{selectedTodo.content || '---'}</Text>
+                <Text style={styles.modalLabel}>期限</Text><Text style={styles.modalValue}>{formatDeadline(selectedTodo.deadline)}</Text>
+                <Text style={styles.modalLabel}>メモ</Text><Text style={styles.modalValue}>{selectedTodo.memo || '---'}</Text>
               </ScrollView>
             )}
             <View style={{ marginTop: 15 }}><Button title="閉じる" color="#666" onPress={() => setIsDetailModalVisible(false)} /></View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* 特定日付のタスク一覧ポップアップモーダル */}
+      <Modal animationType="fade" transparent={true} visible={isDateModalVisible} onRequestClose={() => setIsDateModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContainer, { maxHeight: '70%' }]}>
+            <Text style={styles.modalTitle}>{selectedDateStr} のタスク</Text>
+            <FlatList
+              data={selectedDateTodos}
+              keyExtractor={(item) => item.id}
+              renderItem={({ item }) => (
+                <View style={styles.dateTodoItem}>
+                  <TouchableOpacity style={styles.checkbox} onPress={() => { completeTodo(item); setIsDateModalVisible(false); }}>
+                    <View style={styles.checkboxInner} />
+                  </TouchableOpacity>
+                  <Text style={styles.todoTitle}>{item.title}</Text>
+                </View>
+              )}
+              ListEmptyComponent={<Text style={styles.emptyText}>この日が締め切りのタスクはありません。</Text>}
+            />
+            <View style={{ marginTop: 15 }}><Button title="閉じる" color="#666" onPress={() => setIsDateModalVisible(false)} /></View>
           </View>
         </View>
       </Modal>
@@ -390,63 +511,72 @@ const webInputStyle = {
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f5f5f5' },
+  container: { flex: 1, backgroundColor: '#f8f9fa' },
   
-  //  ヘッダーのスタイル
-  header: { height: 60, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#e0e0e0', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 15, paddingTop: 10 },
-  headerIcon: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#f0f0f0', justifyContent: 'center', alignItems: 'center', cursor: 'pointer' },
-  headerIconText: { fontSize: 14 },
-  headerDate: { fontSize: 16, fontWeight: 'bold', color: '#333' },
+  header: { height: 60, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#e9ecef', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 15, paddingTop: 10 },
+  headerIcon: { width: 36, height: 36, borderRadius: 8, backgroundColor: '#f1f3f5', justifyContent: 'center', alignItems: 'center' },
+  headerIconText: { fontSize: 13, fontWeight: 'bold', color: '#495057' },
+  headerDate: { fontSize: 15, fontWeight: 'bold', color: '#212529' },
 
-  // タブバー（スワイプの補助）
-  tabBar: { flexDirection: 'row', backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#eee' },
-  tabItem: { flex: 1, paddingVertical: 10, alignItems: 'center', borderBottomWidth: 2, borderBottomColor: 'transparent' },
+  tabBar: { flexDirection: 'row', backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#e9ecef' },
+  tabItem: { flex: 1, paddingVertical: 12, alignItems: 'center', borderBottomWidth: 2, borderBottomColor: 'transparent' },
   tabActive: { borderBottomColor: '#FF9500' },
-  tabText: { fontSize: 13, color: '#888', fontWeight: '600' },
+  tabText: { fontSize: 12, color: '#868e96', fontWeight: 'bold', letterSpacing: 1 },
   tabTextActive: { color: '#FF9500' },
 
-  //  メインエリアのスタイル
-  mainContent: { flex: 1, padding: 15 },
-  emptyText: { textAlign: 'center', color: '#999', marginTop: 40, fontSize: 13, lineHeight: 20 },
+  mainContent: { flex: 1, padding: 10 },
+  emptyText: { textAlign: 'center', color: '#adb5bd', marginTop: 30, fontSize: 13, lineHeight: 20 },
 
-  // タスクアイテム
-  todoItem: { backgroundColor: '#fff', padding: 12, borderRadius: 5, marginBottom: 8, borderLeftWidth: 5, borderLeftColor: '#FF9500', flexDirection: 'row', alignItems: 'center' },
-  checkbox: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: '#FF9500', justifyContent: 'center', alignItems: 'center', marginRight: 12 },
+  todoItem: { backgroundColor: '#fff', padding: 14, borderRadius: 8, marginBottom: 8, borderLeftWidth: 4, borderLeftColor: '#FF9500', flexDirection: 'row', alignItems: 'center', shadowColor: '#000000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 3, elevation: 2,},
+  checkbox: { width: 18, height: 18, borderRadius: 9, borderWidth: 2, borderColor: '#FF9500', justifyContent: 'center', alignItems: 'center', marginRight: 12 },
   checkboxInner: { width: 8, height: 8, borderRadius: 4, backgroundColor: 'transparent' },
-  textContainer: { flex: 1, cursor: 'pointer' },
-  todoTitle: { fontSize: 15, fontWeight: 'bold', color: '#333' },
-  repeatBadge: { fontSize: 10, color: '#007AFF', fontWeight: 'normal' },
-  todoDescription: { fontSize: 12, color: '#666', marginTop: 2 },
-  deadlineText: { fontSize: 11, color: '#FF3B30', fontWeight: '600', marginTop: 3 },
+  checkboxPlaceholder: { width: 18, height: 18, marginRight: 12, borderWidth: 2, borderColor: '#ccc', borderRadius: 9, backgroundColor: '#eee' },
+  textContainer: { flex: 1, },
+  todoTitle: { fontSize: 14, fontWeight: 'bold', color: '#212529' },
+  repeatBadge: { fontSize: 10, color: '#007AFF', fontWeight: 'bold' },
+  todoDescription: { fontSize: 12, color: '#495057', marginTop: 2 },
+  deadlineText: { fontSize: 11, color: '#FA5252', fontWeight: 'bold', marginTop: 4 },
 
-  // カレンダープレースホルダー
-  calendarPlaceholder: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
-  calendarTitle: { fontSize: 16, fontWeight: 'bold', color: '#555', marginBottom: 8 },
-  calendarSub: { fontSize: 13, color: '#888', textAlign: 'center' },
+  calendarContainer: { flex: 1, backgroundColor: '#fff', borderRadius: 8, padding: 10, shadowColor: '#000000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 3, elevation: 2, },
+  calendarHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
+  monthNavBtn: { padding: 10, },
+  monthNavText: { fontSize: 14, color: '#495057' },
+  calendarMonthTitle: { fontSize: 16, fontWeight: 'bold', color: '#212529' },
+  weekHeader: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#eee', paddingBottom: 5, marginBottom: 5 },
+  weekText: { flex: 1, textAlign: 'center', fontSize: 12, fontWeight: 'bold', color: '#495057' },
+  sundayText: { color: '#FA5252' },
+  saturdayText: { color: '#228BE6' },
+  calendarGrid: { flexDirection: 'row', flexWrap: 'wrap' },
   
-  //  フッターのスタイル
-  footer: { height: 65, backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: '#e0e0e0', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingBottom: 5 },
-  footerLeft: { flex: 1.2, flexDirection: 'row', justifyContent: 'flex-start' },
-  footerCenter: { flex: 1, alignItems: 'center' },
-  footerRight: { flex: 1.2, flexDirection: 'row', justifyContent: 'flex-end' },
+  calendarCell: { width: '14.28%', height: 85, borderBottomWidth: 1, borderBottomColor: '#f1f3f5', borderRightWidth: 1, borderRightColor: '#f8f9fa', padding: 2, justifyContent: 'flex-start', },
+  calendarCellEmpty: { width: '14.28%', height: 85 },
+  calendarDayText: { fontSize: 11, fontWeight: '500', color: '#212529', marginBottom: 2 },
+  calendarTaskScroll: { flex: 1 },
+  calendarTaskRow: { backgroundColor: '#FFF0F6', borderRadius: 2, paddingHorizontal: 2, paddingVertical: 1, marginBottom: 2 },
+  calendarTaskRowRepeat: { backgroundColor: '#EBF8FF' },
+  calendarTaskText: { fontSize: 9, color: '#D6336C', fontWeight: '500' },
+  dateTodoItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#eee' },
+  
+  footer: { height: 65, backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: '#e9ecef', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingBottom: 5 },
+  footerLeft: { flex: 1.5, flexDirection: 'row', justifyContent: 'flex-start' },
+  footerCenter: { flex: 0.8, alignItems: 'center' },
+  footerRight: { flex: 1, flexDirection: 'row', justifyContent: 'flex-end' },
 
-  // フッター内の各種ボタン
-  histBtn: { backgroundColor: '#f0f0f0', paddingVertical: 8, paddingHorizontal: 10, borderRadius: 8, minWidth: 45, alignItems: 'center' },
-  histBtnDisabled: { opacity: 0.4 },
-  histBtnText: { fontSize: 11, fontWeight: 'bold', color: '#333' },
-  addButton: { backgroundColor: '#FF9500', paddingVertical: 10, paddingHorizontal: 16, borderRadius: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 3 },
+  histBtn: { backgroundColor: '#f1f3f5', paddingVertical: 8, paddingHorizontal: 8, borderRadius: 6, minWidth: 65, alignItems: 'center' },
+  histBtnDisabled: { opacity: 0.3 },
+  histBtnText: { fontSize: 11, fontWeight: 'bold', color: '#495057' },
+  addButton: { backgroundColor: '#FF9500', paddingVertical: 10, paddingHorizontal: 16, borderRadius: 20 },
   addButtonText: { color: '#fff', fontSize: 13, fontWeight: 'bold' },
-  menuButton: { backgroundColor: '#f0f0f0', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8 },
-  menuButtonText: { fontSize: 12, fontWeight: 'bold', color: '#555' },
+  menuButton: { backgroundColor: '#f1f3f5', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 6 },
+  menuButtonText: { fontSize: 12, fontWeight: 'bold', color: '#495057' },
 
-  // モーダル共通スタイル
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.5)', justifyContent: 'center', alignItems: 'center' },
-  modalContainer: { width: '85%', maxHeight: '70%', backgroundColor: '#fff', borderRadius: 12, padding: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4 },
-  modalTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 15, color: '#333', borderBottomWidth: 1, borderBottomColor: '#eee', paddingBottom: 5 },
-  modalLabel: { fontSize: 12, fontWeight: 'bold', color: '#666', marginTop: 10 },
-  modalValue: { fontSize: 14, color: '#333', backgroundColor: '#f9f9f9', padding: 8, borderRadius: 5, marginTop: 4 },
-  input: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#ddd', borderRadius: 5, paddingHorizontal: 10, height: 36, marginBottom: 8, fontSize: 13 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.4)', justifyContent: 'center', alignItems: 'center' },
+  modalContainer: { width: '85%', maxHeight: '70%', backgroundColor: '#fff', borderRadius: 8, padding: 20 },
+  modalTitle: { fontSize: 16, fontWeight: 'bold', marginBottom: 15, color: '#212529', borderBottomWidth: 1, borderBottomColor: '#e9ecef', paddingBottom: 6, letterSpacing: 0.5 },
+  modalLabel: { fontSize: 11, fontWeight: 'bold', color: '#868e96', marginTop: 10, letterSpacing: 0.5 },
+  modalValue: { fontSize: 13, color: '#212529', backgroundColor: '#f8f9fa', padding: 8, borderRadius: 4, marginTop: 4 },
+  input: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#dee2e6', borderRadius: 4, paddingHorizontal: 10, height: 36, marginBottom: 8, fontSize: 13 },
   dateTimeRow: { flexDirection: 'row', marginBottom: 5 },
-  repeatSection: { backgroundColor: '#f9f9f9', padding: 8, borderRadius: 5, marginBottom: 5, borderWidth: 1, borderColor: '#e8e8e8' },
-  sectionLabel: { fontSize: 11, fontWeight: 'bold', color: '#555', marginBottom: 5 },
+  repeatSection: { backgroundColor: '#f8f9fa', padding: 8, borderRadius: 4, marginBottom: 5, borderWidth: 1, borderColor: '#e9ecef' },
+  sectionLabel: { fontSize: 11, fontWeight: 'bold', color: '#495057', marginBottom: 5 },
 });
