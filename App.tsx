@@ -1,6 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { Button, FlatList, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
+interface Tag {
+  id: string;
+  name: string;
+  color: string; // 例: '#FF3B30' (HEX値)
+}
+
 interface TodoItem {
   id: string;
   title: string;
@@ -10,6 +16,7 @@ interface TodoItem {
   memo: string;
   repeatId?: string;
   completedAt?: string;
+  tags: string[];
 }
 
 interface RepeatPattern {
@@ -21,6 +28,7 @@ interface RepeatPattern {
   intervalDays: number;
   startDate: string;
   endDate: string;
+  tags: string[];
 }
 
 interface HistorySnapshot {
@@ -60,6 +68,22 @@ export default function App() {
   const [repeatInterval, setRepeatInterval] = useState('');
   const [repeatEndDate, setRepeatEndDate] = useState('');
 
+  // タグのマスターデータ
+  const [tags, setTags] = useState<Tag[]>([
+    { id: 'tag-1', name: '仕事', color: '#007AFF' },
+    { id: 'tag-2', name: 'プライベート', color: '#34C759' },
+    { id: 'tag-3', name: '重要', color: '#FF3B30' },
+  ]);
+
+  // 現在フィルター（ソート）対象として選択されているタグのID（nullならすべて表示）
+  const [selectedFilterTagId, setSelectedFilterTagId] = useState<string | null>(null);
+
+  // 新規タスク作成時、現在フォームで選択されているタグIDの配列
+  const [selectedFormTagIds, setSelectedFormTagIds] = useState<string[]>([]);
+
+  // タグ管理モーダルの表示フラグ
+  const [isTagModalVisible, setIsTagModalVisible] = useState(false);
+
   // 詳細モーダル用State
   const [selectedTodo, setSelectedTodo] = useState<TodoItem | null>(null);
   const [isDetailModalVisible, setIsDetailModalVisible] = useState(false);
@@ -68,16 +92,20 @@ export default function App() {
     const savedTodos = localStorage.getItem('advanced-todo-list-v10');
     const savedPatterns = localStorage.getItem('repeat-patterns-v10');
     const savedCompleted = localStorage.getItem('completed-todos-v10');
+    const savedTags = localStorage.getItem('todo-tags-v10');
+    
     if (savedTodos) setTodos(JSON.parse(savedTodos));
     if (savedPatterns) setRepeatPatterns(JSON.parse(savedPatterns));
     if (savedCompleted) setCompletedTodos(JSON.parse(savedCompleted));
+    if (savedTags) setTags(JSON.parse(savedTags));
   }, []);
 
   useEffect(() => {
     localStorage.setItem('advanced-todo-list-v10', JSON.stringify(todos));
     localStorage.setItem('repeat-patterns-v10', JSON.stringify(repeatPatterns));
     localStorage.setItem('completed-todos-v10', JSON.stringify(completedTodos));
-  }, [todos, repeatPatterns, completedTodos]);
+    localStorage.setItem('todo-tags-v10', JSON.stringify(tags));
+  }, [todos, repeatPatterns, completedTodos, tags]);
 
   const saveToHistory = () => {
     const snapshot: HistorySnapshot = {
@@ -140,7 +168,8 @@ export default function App() {
       }
       const newPatternId = `pattern-${Date.now()}`;
       const newPattern: RepeatPattern = { 
-        id: newPatternId, title, description, content, time: deadlineTime, intervalDays, startDate: deadlineDate, endDate: repeatEndDate 
+        id: newPatternId, title, description, content, time: deadlineTime, intervalDays, startDate: deadlineDate, endDate: repeatEndDate, 
+        tags: selectedFormTagIds
       };
       setRepeatPatterns([...repeatPatterns, newPattern]);
 
@@ -162,7 +191,8 @@ export default function App() {
           content,
           deadline: `${y}-${m}-${d}T${deadlineTime}`,
           memo,
-          repeatId: newPatternId
+          repeatId: newPatternId,
+          tags: selectedFormTagIds
         });
 
         current.setDate(current.getDate() + intervalDays);
@@ -172,11 +202,14 @@ export default function App() {
     } else {
       // 単発タスクの生成
       const fullDeadline = `${deadlineDate}T${deadlineTime}`;
-      const singleTodo: TodoItem = { id: `todo-${Date.now()}`, title, description, content, deadline: fullDeadline, memo };
+      const singleTodo: TodoItem = {
+        id: `todo-${Date.now()}`, title, description, content, deadline: fullDeadline, memo, tags: selectedFormTagIds 
+      };
       setTodos([...todos, singleTodo]);
     }
 
     setTitle(''); setDescription(''); setContent(''); setMemo(''); setRepeatInterval(''); setRepeatEndDate('');
+    setSelectedFormTagIds([]);
     setIsAddModalVisible(false);
   };
 
@@ -216,12 +249,16 @@ export default function App() {
 
   // タスク一覧（リスト画面）用のフィルタリングロジック
   const getFilteredListTodos = () => {
+    let sourceTodos = todos;
+    if (selectedFilterTagId) {
+      sourceTodos = todos.filter(todo => todo.tags && todo.tags.includes(selectedFilterTagId));
+    }
     // 1. まず通常の単発タスクをすべて抽出
-    const singleTodos = todos.filter(todo => !todo.repeatId);
+    const singleTodos = sourceTodos.filter(todo => !todo.repeatId);
 
-    // 2. 定期タスクに関しては、グループ（repeatId）ごとに一番日付が若い（直近の）1件だけを抽出
+    // 2. 定期タスクに関しては、グループ（repeatId）ごとに一番期限が近い1件だけを抽出
     const repeatMap = new Map<string, TodoItem>();
-    todos.forEach(todo => {
+    sourceTodos.forEach(todo => {
       if (todo.repeatId) {
         const existing = repeatMap.get(todo.repeatId);
         if (!existing || new Date(todo.deadline).getTime() < new Date(existing.deadline).getTime()) {
@@ -287,13 +324,21 @@ export default function App() {
         <TouchableOpacity key={`day-${day}`} style={styles.calendarCell} onPress={() => handleDatePress(day)}>
           <Text style={styles.calendarDayText}>{day}</Text>
           <ScrollView style={styles.calendarTaskScroll} showsVerticalScrollIndicator={false}>
-            {dayTodos.map((todo) => (
-              <View key={todo.id} style={[styles.calendarTaskRow, todo.repeatId ? styles.calendarTaskRowRepeat : null]}>
-                <Text style={styles.calendarTaskText} numberOfLines={1}>
-                  {todo.repeatId ? '[定] ' : ''}{todo.title}
-                </Text>
-              </View>
-            ))}
+            {dayTodos.map((todo) => {
+              // 最初のタグの色を取得（なければ透明・デフォルト）
+              const firstTagId = todo.tags && todo.tags[0];
+              const firstTag = tags.find(t => t.id === firstTagId);
+              const tagColor = firstTag ? firstTag.color : 'transparent';
+
+              return (
+                <View key={todo.id} style={[styles.calendarTaskRow, todo.repeatId ? styles.calendarTaskRowRepeat : null]}>
+                  <Text style={styles.calendarTaskText} numberOfLines={1}>
+                    {firstTag && <Text style={{ color: tagColor, fontWeight: 'bold' }}>● </Text>}
+                    {todo.repeatId ? '[定] ' : ''}{todo.title}
+                  </Text>
+                </View>
+              );
+            })}
           </ScrollView>
         </TouchableOpacity>
       );
@@ -330,10 +375,46 @@ export default function App() {
           })()}
         </Text>
         
-        <TouchableOpacity style={styles.headerIcon} onPress={() => alert('並び替え機能')}>
-          <Text style={styles.headerIconText}>▲▼</Text>
+        <TouchableOpacity
+          style={[styles.headerIcon, selectedFilterTagId ? { backgroundColor: '#FF2D55' } : null]}
+          onPress={() => {
+            if (!selectedFilterTagId) {
+              // 未選択なら最初のタグを選択
+              setSelectedFilterTagId(tags[0].id);
+            } else {
+              const currentIndex = tags.findIndex(t => t.id === selectedFilterTagId);
+              if (currentIndex === tags.length - 1) {
+                // 最後のタグだったらフィルター解除（すべて表示）
+                setSelectedFilterTagId(null);
+              } else {
+                // 次のタグへ進む
+                setSelectedFilterTagId(tags[currentIndex + 1].id);
+              }
+            }
+          }}
+        >
+          <Text style={[styles.headerIconText, selectedFilterTagId ? { color: '#FF2D55' } : null]}>
+            {selectedFilterTagId ? '絞込中' : '▲▼'}
+          </Text>
         </TouchableOpacity>
       </View>
+      
+      {selectedFilterTagId && (
+        <View style={{ backgroundColor: '#fff', paddingHorizontal: 15, paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: '#f1f3f5', flexDirection: 'row', alignItems: 'center' }}>
+          <Text style={{ fontSize: 11, color: '#868e96' }}>現在絞り込み中: </Text>
+          {(() => {
+            const currentFilterTag = tags.find(t => t.id === selectedFilterTagId);
+            return currentFilterTag ? (
+              <View style={[styles.inlineTagBadge, { backgroundColor: currentFilterTag.color, marginBottom: 0 }]}>
+                <Text style={styles.inlineTagBadgeText}>{currentFilterTag.name}</Text>
+              </View>
+            ) : null;
+          })()}
+          <TouchableOpacity style={{ marginLeft: 'auto' }} onPress={() => setSelectedFilterTagId(null)}>
+            <Text style={{ fontSize: 11, color: '#007AFF', fontWeight: 'bold' }}>解除</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* タブバー */}
       <View style={styles.tabBar}>
@@ -363,6 +444,19 @@ export default function App() {
                       {item.title} {item.repeatId ? <Text style={styles.repeatBadge}>[定期]</Text> : null}
                     </Text>
                     {item.description ? <Text style={styles.todoDescription}>{item.description}</Text> : null}
+                    {item.tags && item.tags.length > 0 && (
+                      <View style={styles.todoItemTagContainer}>
+                        {item.tags.map(tagId => {
+                          const tag = tags.find(t => t.id === tagId);
+                          if (!tag) return null;
+                          return (
+                            <View key={tagId} style={[styles.inlineTagBadge, { backgroundColor: tag.color }]}>
+                              <Text style={styles.inlineTagBadgeText}>{tag.name}</Text>
+                            </View>
+                          );
+                        })}
+                      </View>
+                    )}
                     <Text style={styles.deadlineText}>期限: {formatDeadline(item.deadline)}</Text>
                   </TouchableOpacity>
                 </View>
@@ -415,8 +509,8 @@ export default function App() {
         </View>
 
         <View style={styles.footerRight}>
-          <TouchableOpacity style={styles.menuButton} onPress={() => alert('管理メニュー')}>
-            <Text style={styles.menuButtonText}>メニュー</Text>
+          <TouchableOpacity style={styles.menuButton} onPress={() => setIsTagModalVisible(true)}>
+            <Text style={styles.menuButtonText}>タグ管理</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -431,7 +525,36 @@ export default function App() {
               <TextInput style={styles.input} placeholder="概要" value={description} onChangeText={setDescription} />
               <TextInput style={styles.input} placeholder="内容" value={content} onChangeText={setContent} />
               <TextInput style={styles.input} placeholder="その他メモ" value={memo} onChangeText={setMemo} />
-              
+              <Text style={styles.modalLabel}>タグ（複数選択可）</Text>
+              <View style={styles.tagSelectorContainer}>
+                {tags.map((tag) => {
+                  const isSelected = selectedFormTagIds.includes(tag.id);
+                  return (
+                    <TouchableOpacity
+                      key={tag.id}
+                      style={[
+                        styles.tagChip,
+                        { borderColor: tag.color },
+                        isSelected && { backgroundColor: tag.color }
+                      ]}
+                      onPress={() => {
+                        if (isSelected) {
+                          // すでに選ばれていたら除外
+                          setSelectedFormTagIds(selectedFormTagIds.filter(id => id !== tag.id));
+                        } else {
+                          // 選ばれていなければ追加
+                          setSelectedFormTagIds([...selectedFormTagIds, tag.id]);
+                        }
+                      }}
+                    >
+                      <Text style={[styles.tagChipText, { color: isSelected ? '#fff' : tag.color }]}>
+                        {tag.name}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
               <Text style={styles.modalLabel}>期限設定</Text>
               <View style={styles.dateTimeRow}>
                 <input type="date" value={deadlineDate} onChange={(e) => setDeadlineDate(e.target.value)} style={{ ...webInputStyle, flex: 1, marginRight: 5 }} />
@@ -498,6 +621,88 @@ export default function App() {
               ListEmptyComponent={<Text style={styles.emptyText}>この日が締め切りのタスクはありません。</Text>}
             />
             <View style={{ marginTop: 15 }}><Button title="閉じる" color="#666" onPress={() => setIsDateModalVisible(false)} /></View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* タグ管理モーダル */}
+      <Modal animationType="slide" transparent={true} visible={isTagModalVisible} onRequestClose={() => setIsTagModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContainer, { maxHeight: '80%' }]}>
+            <Text style={styles.modalTitle}>タグの管理</Text>
+            
+            <ScrollView style={{ marginBottom: 15 }}>
+              {/* 既存タグの一覧と編集 */}
+              {tags.map((tag) => (
+                <View key={tag.id} style={styles.tagManageRow}>
+                  <TextInput
+                    style={[styles.input, { flex: 1, marginBottom: 0, marginRight: 8 }]}
+                    value={tag.name}
+                    onChangeText={(newName) => {
+                      // タグ名の変更
+                      setTags(tags.map(t => t.id === tag.id ? { ...t, name: newName } : t));
+                    }}
+                  />
+                  
+                  {/* カラーパレット（簡易選択） */}
+                  <View style={styles.colorPalette}>
+                    {['#007AFF', '#34C759', '#FF3B30', '#FF9500', '#AF52DE', '#FF2D55', '#5856D6', '#8E8E93'].map((colorCode) => (
+                      <TouchableOpacity
+                        key={colorCode}
+                        style={[
+                          styles.colorDot,
+                          { backgroundColor: colorCode },
+                          tag.color === colorCode && styles.colorDotSelected
+                        ]}
+                        onPress={() => {
+                          // タグの色を変更
+                          setTags(tags.map(t => t.id === tag.id ? { ...t, color: colorCode } : t));
+                        }}
+                      />
+                    ))}
+                  </View>
+
+                  {/* タグの削除 */}
+                  <TouchableOpacity
+                    style={styles.tagDeleteBtn}
+                    onPress={() => {
+                      if (tags.length <= 1) {
+                        alert('最低1つのタグは残す必要があります。');
+                        return;
+                      }
+                      saveToHistory();
+                      // タグマスターから削除
+                      setTags(tags.filter(t => t.id !== tag.id));
+                      // 既存タスクに紐づいているIDも外す
+                      setTodos(todos.map(todo => ({
+                        ...todo,
+                        tags: todo.tags ? todo.tags.filter(id => id !== tag.id) : []
+                      })));
+                    }}
+                  >
+                    <Text style={styles.tagDeleteBtnText}>削除</Text>
+                  </TouchableOpacity>
+                </View>
+              ))}
+
+              {/* 新しいタグの追加入力欄 */}
+              <TouchableOpacity
+                style={styles.tagAddActionBtn}
+                onPress={() => {
+                  saveToHistory();
+                  const newTag: Tag = {
+                    id: `tag-${Date.now()}`,
+                    name: `新規タグ ${tags.length + 1}`,
+                    color: '#8E8E93'
+                  };
+                  setTags([...tags, newTag]);
+                }}
+              >
+                <Text style={styles.tagAddActionBtnText}>+ 新しいタグを追加</Text>
+              </TouchableOpacity>
+            </ScrollView>
+
+            <Button title="閉じる" color="#666" onPress={() => setIsTagModalVisible(false)} />
           </View>
         </View>
       </Modal>
@@ -579,4 +784,21 @@ const styles = StyleSheet.create({
   dateTimeRow: { flexDirection: 'row', marginBottom: 5 },
   repeatSection: { backgroundColor: '#f8f9fa', padding: 8, borderRadius: 4, marginBottom: 5, borderWidth: 1, borderColor: '#e9ecef' },
   sectionLabel: { fontSize: 11, fontWeight: 'bold', color: '#495057', marginBottom: 5 },
+
+  tagSelectorContainer: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 6, marginBottom: 10 },
+  tagChip: { borderWidth: 1, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12, marginRight: 8, marginBottom: 8 },
+  tagChipText: { fontSize: 11, fontWeight: 'bold' },
+  todoItemTagContainer: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 4 },
+  inlineTagBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, marginRight: 4, marginBottom: 2 },
+  inlineTagBadgeText: { color: '#fff', fontSize: 9, fontWeight: 'bold' },
+
+  // --- スタイルの末尾に追加 ---
+  tagManageRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#f8f9fa', padding: 8, borderRadius: 6, marginBottom: 10, borderWidth: 1, borderColor: '#e9ecef' },
+  colorPalette: { flexDirection: 'row', flexWrap: 'wrap', width: 100, justifyContent: 'center', marginHorizontal: 4 },
+  colorDot: { width: 16, height: 16, borderRadius: 8, margin: 2, borderWidth: 1, borderColor: 'transparent' },
+  colorDotSelected: { borderColor: '#000', borderWidth: 2 },
+  tagDeleteBtn: { backgroundColor: '#FFE3E3', paddingVertical: 6, paddingHorizontal: 10, borderRadius: 4 },
+  tagDeleteBtnText: { color: '#F03E3E', fontSize: 11, fontWeight: 'bold' },
+  tagAddActionBtn: { borderStyle: 'dashed', borderWidth: 1, borderColor: '#ced4da', padding: 10, borderRadius: 6, alignItems: 'center', marginTop: 5, marginBottom: 15 },
+  tagAddActionBtnText: { color: '#495057', fontSize: 13, fontWeight: '500' },
 });
